@@ -1,0 +1,63 @@
+---
+title: "Artigo RBFIN Gerenciamento de Resultados"
+format: html
+---
+
+# Aquisição de Dados e ETL
+
+## Carregando Pacotes
+
+```{r}
+library(dplyr)
+library(furrr)
+library(readr)
+library(pins)
+```
+
+## Baixando os Dados
+
+```{r}
+anos_download <- unique(format(seq(as.Date("2005-01-01"),as.Date("2020-12-31"),by = "month"),"%Y"))
+meses_download <- format(seq(as.Date("2021-01-01"),as.Date("2024-07-01"),by = "month"),"%Y%m")
+
+
+future_map(anos_download, function(ano){
+  url <- paste0("https://dados.cvm.gov.br/dados/FI/DOC/INF_DIARIO/DADOS/HIST/inf_diario_fi_",ano,".zip")
+  destfile <- paste0("dados/informe_diario",ano,".zip")
+  download.file(url,destfile)
+})
+
+future_map(meses_download, function(mes){
+  url <- paste0("https://dados.cvm.gov.br/dados/FI/DOC/INF_DIARIO/DADOS/inf_diario_fi_",mes,".zip")
+  destfile <- paste0("dados/informe_diario",mes,".zip")
+  download.file(url,destfile)
+})
+
+zipfiles <- list.files("dados",full.names = T)
+
+future_map(zipfiles,function(path){
+  unzip(path,exdir = "dados")
+})
+
+file.remove(zipfiles)
+
+
+informes_path <- list.files("dados",full.names = T,pattern = ".csv")
+
+
+future_map(informes_path,function(informe){
+  read_delim(informe, 
+             delim = ";", 
+             escape_double = FALSE,
+             col_types = cols(DT_COMPTC = col_date(format = "%Y-%m-%d")), 
+             locale = locale(), 
+             trim_ws = TRUE)
+}) -> informe_diario_fundos
+
+
+bind_rows(informe_diario_fundos) -> informe_diario_fundos
+
+board <- board_folder("board")
+pin_write(board,informe_diario_fundos,"informe_diario_fundos",type = "qs")
+file.remove(informes_path)
+```
