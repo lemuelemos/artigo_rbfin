@@ -1,5 +1,8 @@
 ---
-title: "Artigo RBFIN Gerenciamento de Resultados"
+title: "Artigo RBFIN - Gerenciamento de Resultados"
+execute:
+  echo: true
+  output: false
 format: html
 ---
 
@@ -7,61 +10,101 @@ format: html
 
 ## Carregando Pacotes
 
-```{r}
+```{r carregando pacotes}
 library(dplyr)
 library(furrr)
 library(readr)
 library(pins)
-```
 
-## Baixando os Dados
-
-```{r}
-anos_download <- unique(format(seq(as.Date("2005-01-01"),as.Date("2020-12-31"),by = "month"),"%Y"))
-meses_download <- format(seq(as.Date("2021-01-01"),as.Date("2024-07-01"),by = "month"),"%Y%m")
-
-plan(multisession, workers = 6)
-
-future_map(anos_download, function(ano){
-  url <- paste0("https://dados.cvm.gov.br/dados/FI/DOC/INF_DIARIO/DADOS/HIST/inf_diario_fi_",ano,".zip")
-  destfile <- paste0("dados/informe_diario",ano,".zip")
-  download.file(url,destfile)
-})
-
-future_map(meses_download, function(mes){
-  url <- paste0("https://dados.cvm.gov.br/dados/FI/DOC/INF_DIARIO/DADOS/inf_diario_fi_",mes,".zip")
-  destfile <- paste0("dados/informe_diario",mes,".zip")
-  download.file(url,destfile)
-})
-
-zipfiles <- list.files("dados",full.names = T)
-
-future_map(zipfiles,function(path){
-  unzip(path,exdir = "dados")
-})
-
-plan(sequential)
-file.remove(zipfiles)
-
-
-informes_path <- list.files("dados",full.names = T,pattern = ".csv")
-
-plan(multisession, workers = 6)
-future_map(informes_path,function(informe){
-  read_delim(informe, 
-             delim = ";", 
-             escape_double = FALSE,
-             col_types = cols(DT_COMPTC = col_date(format = "%Y-%m-%d")), 
-             locale = locale(), 
-             trim_ws = TRUE)
-}) -> informe_diario_fundos
-
-
-bind_rows(informe_diario_fundos) -> informe_diario_fundos
-
-plan(sequential)
-
+## Conexão com o banco de dados
 board <- board_folder("board")
-pin_write(board,informe_diario_fundos,"informe_diario_fundos",type = "qs")
-file.remove(informes_path)
+
 ```
+
+## Aquisição de dados e montagem do banco de dados
+
+Os dados dos anos de 2005 a 2020 estão agrupados anualmente, por isso temos que criar um vetor que contém todos estes anos para baixa-los no site da CVM. Após baixar os dados até 2020, criamos uma lista de vetores mês a mês desde jan 2021 até julho de 2024. A função **future_map** faz isso de maneira assíncrona. 
+
+```{r baixando os dados}
+anos_download <- unique(format(seq(as.Date("2005-01-01"),
+                        as.Date("2020-12-31"),
+                        by = "month"),"%Y"))
+
+meses_download <- format(seq(as.Date("2021-01-01"),
+                         as.Date("2024-07-01"),
+                         by = "month"),"%Y%m")
+
+baixar_dados <- function(){
+  plan(multisession, workers = 6)
+
+  future_map(anos_download, function(ano){
+    url <- paste0("https://dados.cvm.gov.br/dados/FI/DOC/INF_DIARIO/DADOS/HIST/inf_diario_fi_",
+    ano,
+    ".zip")
+
+    destfile <- paste0("dados/informe_diario",ano,".zip")
+
+    download.file(url,destfile)
+  })
+
+  future_map(meses_download, function(mes){
+    url <- paste0("https://dados.cvm.gov.br/dados/FI/DOC/INF_DIARIO/DADOS/inf_diario_fi_",
+    mes,
+    ".zip")
+
+    destfile <- paste0("dados/informe_diario",mes,".zip")
+
+    download.file(url,destfile)
+  })
+
+  zipfiles <- list.files("dados",full.names = T)
+
+  future_map(zipfiles,function(path){
+    unzip(path,exdir = "dados")
+  })
+
+  plan(sequential)
+  file.remove(zipfiles)
+}
+
+if(length(pin_list(board)) == 0){
+  baixar_dados()
+}
+
+```
+
+
+Após baixar os dados em zip, dezipamos e obtemos os dados no padrão csv. Leio todos os arquivos e agrupo todos em uma mesma base. 
+
+```{r lendo e salvando os dados}
+leitura_dados <- function(){
+  informes_path <- list.files("dados",full.names = T,pattern = ".csv")
+
+  plan(multisession, workers = 6)
+  future_map(informes_path,function(informe){
+    read_delim(informe, 
+               delim = ";", 
+               escape_double = FALSE,
+               col_types = cols(DT_COMPTC = col_date(format = "%Y-%m-%d")), 
+               locale = locale(), 
+               trim_ws = TRUE)
+  }) -> informe_diario_fundos
+
+  bind_rows(informe_diario_fundos) -> informe_diario_fundos
+
+  plan(sequential)
+  file.remove(informes_path)
+
+  return(informe_diario_fundos)
+}
+
+if(length(pin_list(board)) == 0){
+  informe_diario_fundos <- leitura_dados()
+  pin_write(board,informe_diario_fundos,"informe_diario_fundos",type = "qs")
+}
+
+
+```
+
+
+## Processo de ETL
