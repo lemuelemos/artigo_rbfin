@@ -23,7 +23,7 @@ board <- board_folder("board")
 
 ## Aquisição de dados e montagem do banco de dados
 
-Os dados dos anos de 2005 a 2020 estão agrupados anualmente, por isso temos que criar um vetor que contém todos estes anos para baixa-los no site da CVM. Após baixar os dados até 2020, criamos uma lista de vetores mês a mês desde jan 2021 até julho de 2024. A função **future_map** faz isso de maneira assíncrona. 
+Os dados dos anos de 2005 a 2020 estão agrupados anualmente, por isso temos que criar um vetor que contém todos estes anos para baixa-los no site da CVM. Após baixar os dados até 2020, criamos uma lista de vetores mês a mês desde jan 2021 até julho de 2024. A função **future_map** faz isso de maneira assíncrona.
 
 ```{r baixando os dados}
 anos_download <- unique(format(seq(as.Date("2005-01-01"),
@@ -73,13 +73,51 @@ if(length(pin_list(board)) == 0){
 
 ```
 
+Vamos baixar os dados complementares de extrato de informações e cadastro dos fundos.
 
-Após baixar os dados em zip, dezipamos e obtemos os dados no padrão csv. Leio todos os arquivos e agrupo todos em uma mesma base. 
+```{r baixando dados do extrato de fundos}
+baixar_extrato <- function(){
+  anos_download <- unique(format(seq(as.Date("2019-01-01"),
+                                     as.Date("2024-12-31"),
+                                     by = "month"),"%Y"))
+  
+  purrr::map(anos_download,\(ano){
+    download.file(paste0("https://dados.cvm.gov.br/dados/FI/DOC/EXTRATO/DADOS/extrato_fi_",ano,".csv"),
+                  paste0("./dados/extrato_fi_atual_",ano,".csv"))
+  })
+  
+  
+  download.file("https://dados.cvm.gov.br/dados/FI/DOC/EXTRATO/DADOS/extrato_fi.csv",
+                "./dados/extrato_fi_atual.csv")
+  
+  extratos_path <- list.files("dados",full.names = T,pattern = ".csv")
+  
+  purrr::map(extratos_path,\(extrato){
+    read_delim(extrato, 
+               delim = ";", 
+               escape_double = FALSE, 
+               col_types = cols(DT_COMPTC = col_date(format = "%Y-%m-%d")), 
+               locale = locale(encoding = "latin1"), 
+               trim_ws = TRUE)
+  }) %>% 
+    bind_rows() -> extrato_fi
+  
+  return(extrato_fi)
+} 
+
+if(!"extrato_fi" %in% pin_list(board)){
+  extrato_fi <- baixar_extrato()
+  pin_write(board,extrato_fi,"extrato_fi",type = "qs")
+}
+
+```
+
+Após baixar os dados em zip, dezipamos e obtemos os dados no padrão csv. Leio todos os arquivos e agrupo todos em uma mesma base.
 
 ```{r lendo e salvando os dados}
 leitura_dados <- function(){
   informes_path <- list.files("dados",full.names = T,pattern = ".csv")
-
+  
   plan(multisession, workers = 6)
   future_map(informes_path,function(informe){
     read_delim(informe, 
@@ -89,12 +127,12 @@ leitura_dados <- function(){
                locale = locale(), 
                trim_ws = TRUE)
   }) -> informe_diario_fundos
-
+  
   bind_rows(informe_diario_fundos) -> informe_diario_fundos
-
+  
   plan(sequential)
   file.remove(informes_path)
-
+  
   return(informe_diario_fundos)
 }
 
@@ -107,4 +145,9 @@ if(length(pin_list(board)) == 0){
 ```
 
 
+
 ## Processo de ETL
+
+```{r tratamento de dados}
+pin_read(board,"informe_diario_fundos")
+```
